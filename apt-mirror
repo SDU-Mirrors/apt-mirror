@@ -926,7 +926,91 @@ print "$size_output will be downloaded into archive.\n";
 download_urls( "archive", sort keys %urls_to_download );
 
 ######################################################################################
+## Make hard links for 'by-hash' location to support the 'Acquire-By-Hash' feature
+## Currently, only SHA256 algorithm is supported
+
+print "Building 'by-hash' files.\n";
+
+my @by_hash_file_lists;
+
+sub link_by_hash_sha256_files_in_release
+{
+    # Check the dists/$DIST/Release file for the corresponding 'by-hash' files
+
+    my $dist_uri  = shift; 
+    my ( $release_uri, $release_path, $line ) = '';
+
+    $release_uri  = $dist_uri . "Release";
+    $release_path = get_variable("skel_path") . "/" . sanitise_uri($release_uri);
+
+    unless ( open STREAM, "<$release_path" )
+    {
+        warn( "Failed to open Release file from " . $release_uri );
+        return;
+    }
+
+    my $checksums = 0;
+    while ( $line = <STREAM> )
+    {
+        chomp $line;
+        if ($checksums)
+        {
+            if ( $line =~ /^ +(.*)$/ )
+            {
+                my @parts = split( / +/, $1 );
+                if ( @parts == 3 )
+                {
+                    my ( $sha256, $size, $filename ) = @parts;
+                    my $dirname = dirname($filename);
+                    my $sha256_filename = '/'.$dirname.'/by-hash/SHA256/'.$sha256;
+
+                    my $real_file_path = get_variable("skel_path") ."/". sanitise_uri($dist_uri . '/' . $filename);
+                    my $by_hash_file_path = get_variable("skel_path") ."/". sanitise_uri($dist_uri . '/' . $sha256_filename);
+                    
+                    if(-e $real_file_path){
+                        push(@by_hash_file_lists, $dist_uri . '/' . $sha256_filename);
+                        $skipclean{remove_double_slashes(sanitise_uri($dist_uri . '/' . $sha256_filename))} = 1;
+                        my $by_hash_dir = dirname($by_hash_file_path);
+                        if(-e dirname($by_hash_file_path)){}
+                        else{system("mkdir -p $by_hash_dir");}
+                        system("ln -f $real_file_path $by_hash_file_path");
+                    }else{
+                        # Skip the file
+                    }
+                }
+                else
+                {
+                    warn("Malformed checksum line \"$1\" in $release_uri");
+                }
+            }
+            else
+            {
+                $checksums = 0;
+            }
+        }
+        if ( not $checksums )
+        {
+            if ( $line eq "SHA256:" )
+            {
+                $checksums = 1;
+            }
+        }
+    }
+}
+
+foreach (@config_binaries)
+{
+    my ( $arch, $uri, $distribution, @components ) = @{$_};
+    $url = $uri . "/dists/" . $distribution . "/";
+    link_by_hash_sha256_files_in_release( $url );
+}
+
+push(@index_urls, @by_hash_file_lists);
+
+######################################################################################
 ## Copy skel to main archive
+
+print "Applying update to the repository...\n";
 
 sub copy_file
 {
@@ -938,9 +1022,9 @@ sub copy_file
     {
         if ( compare( $from, $to ) != 0 ) { unlink($to); }
     }
-    unless ( copy( $from, $to ) )
+    unless ( system("ln -f $from $to") == 0)
     {
-        warn("apt-mirror: can't copy $from to $to");
+        warn("apt-mirror: can't make hard link from $from to $to");
         return;
     }
     my ( $atime, $mtime ) = ( stat($from) )[ 8, 9 ];
