@@ -94,6 +94,7 @@ use File::Compare;
 use File::Path qw(make_path);
 use File::Basename;
 use Fcntl qw(:flock);
+use Digest::file qw(digest_file_hex);
 
 my $config_file;
 
@@ -933,6 +934,53 @@ print "Building 'by-hash' files.\n";
 
 my @by_hash_file_lists;
 
+sub link_by_hash_sha256_for_specific_file
+{
+    my ($dist_uri, $raw_file_path, $sha256_file_path) = @_;
+    my $sha256_file_dir = dirname($sha256_file_path);
+    unless(-e $sha256_file_dir){
+        system("mkdir -p $sha256_file_dir");
+    }
+    system("ln -f $raw_file_path $sha256_file_path");
+    push(@by_hash_file_lists, $dist_uri);
+    $skipclean{remove_double_slashes(sanitise_uri($dist_uri))} = 1;
+}
+
+sub calc_sha256_for_specific_file
+{
+    my $file_path = shift;
+    return digest_file_hex($file_path, "SHA-256");
+}
+
+
+
+sub link_by_hash_sha256_of_release_files
+{
+    # link dists/$DIST/Release, dists/$DIST/InRelease, dists/$DIST/Release.gpg files
+    my $dist_uri  = shift; 
+    
+    my $Release_path = get_variable("skel_path") . "/" . sanitise_uri($dist_uri . "/Release");
+    my $by_hash_dir = dirname($Release_path) . '/by-hash/SHA256/';
+
+    my $InRelease_path = get_variable("skel_path") . "/" . sanitise_uri($dist_uri . "/InRelease");
+
+    my $Releasegpg_path = get_variable("skel_path") . "/" . sanitise_uri($dist_uri . "/Release.gpg");
+    
+    $dist_uri = $dist_uri . "/by-hash/SHA256/";
+    
+    link_by_hash_sha256_for_specific_file($dist_uri . calc_sha256_for_specific_file($Release_path),
+                                          $Release_path,
+                                          $by_hash_dir . calc_sha256_for_specific_file($Release_path));
+
+    link_by_hash_sha256_for_specific_file($dist_uri . calc_sha256_for_specific_file($InRelease_path),
+                                          $InRelease_path,
+                                          $by_hash_dir . calc_sha256_for_specific_file($InRelease_path));
+
+    link_by_hash_sha256_for_specific_file($dist_uri . calc_sha256_for_specific_file($Releasegpg_path),
+                                          $Releasegpg_path,
+                                          $by_hash_dir . calc_sha256_for_specific_file($Releasegpg_path));
+}
+
 sub link_by_hash_sha256_files_in_release
 {
     # Check the dists/$DIST/Release file for the corresponding 'by-hash' files
@@ -968,12 +1016,7 @@ sub link_by_hash_sha256_files_in_release
                     my $by_hash_file_path = get_variable("skel_path") ."/". sanitise_uri($dist_uri . '/' . $sha256_filename);
                     
                     if(-e $real_file_path){
-                        push(@by_hash_file_lists, $dist_uri . '/' . $sha256_filename);
-                        $skipclean{remove_double_slashes(sanitise_uri($dist_uri . '/' . $sha256_filename))} = 1;
-                        my $by_hash_dir = dirname($by_hash_file_path);
-                        if(-e dirname($by_hash_file_path)){}
-                        else{system("mkdir -p $by_hash_dir");}
-                        system("ln -f $real_file_path $by_hash_file_path");
+                        link_by_hash_sha256_for_specific_file($dist_uri.$sha256_filename, $real_file_path, $by_hash_file_path);
                     }else{
                         # Skip the file
                     }
@@ -1003,6 +1046,7 @@ foreach (@config_binaries)
     my ( $arch, $uri, $distribution, @components ) = @{$_};
     $url = $uri . "/dists/" . $distribution . "/";
     link_by_hash_sha256_files_in_release( $url );
+    link_by_hash_sha256_of_release_files( $url );
 }
 
 push(@index_urls, @by_hash_file_lists);
